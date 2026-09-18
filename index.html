@@ -35,7 +35,7 @@
     <button id="go" type="submit">Open the demo</button>
     <div class="msg" id="msg" role="status"></div>
   </form>
-  <div class="out" id="out" hidden>Signed in on this browser. <a href="game/index.html?present">Open the demo</a> · <a href="#" id="lock">Sign out</a></div>
+  <div class="out" id="out" hidden>Signed in on this browser. <a href="game/splash.html">Open the demo</a> · <a href="#" id="lock">Sign out</a></div>
 </main>
 <script>
 const $ = id => document.getElementById(id), msg = t => $('msg').textContent = t;
@@ -67,7 +67,7 @@ $('f').onsubmit = async e => {
     catch { msg('That password is not right.'); $('go').disabled = false; $('pw').select(); return; }
     msg('Opening…');
     await ask(await worker(), { type: 'key', raw: bits }, 'key-ok');
-    location.href = 'game/index.html?present';
+    location.href = 'game/splash.html';
   } catch (err) { msg('Could not open the demo: ' + err.message); $('go').disabled = false; }
 };
 </script>

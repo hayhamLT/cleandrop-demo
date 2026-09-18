@@ -9,6 +9,8 @@ const TYPES = { html: 'text/html; charset=utf-8', js: 'text/javascript', mjs: 't
 const SCOPE = new URL(self.registration.scope);
 const GAME = new URL('game/', SCOPE).pathname;
 let KEY = null, META = null;
+// what has been decrypted this visit, so the splash's pre-load makes the game open at once
+const PLAIN = new Map();
 
 const db = () => new Promise((res, rej) => { const r = indexedDB.open('cleandrop-demo', 1);
   r.onupgradeneeded = () => { if (!r.result.objectStoreNames.contains('k')) r.result.createObjectStore('k'); }; r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
@@ -34,7 +36,7 @@ self.addEventListener('message', e => {
     await idb('readwrite', s => s.put(KEY, 'key'));
     e.source?.postMessage({ type: 'key-ok' });
   })().catch(err => e.source?.postMessage({ type: 'error', message: String(err && err.message || err) })));
-  if (m.type === 'lock') e.waitUntil((async () => { KEY = null; await idb('readwrite', s => s.delete('key')); e.source?.postMessage({ type: 'locked' }); })());
+  if (m.type === 'lock') e.waitUntil((async () => { KEY = null; PLAIN.clear(); await idb('readwrite', s => s.delete('key')); e.source?.postMessage({ type: 'locked' }); })());
 });
 
 self.addEventListener('fetch', e => {
@@ -43,15 +45,18 @@ self.addEventListener('fetch', e => {
   e.respondWith((async () => {
     const k = await key();
     if (!k) return Response.redirect(new URL('./', SCOPE).href, 302);          // not signed in: back to the gate
-    let rel = decodeURIComponent(url.pathname.slice(GAME.length)) || 'index.html';
+    let rel = decodeURIComponent(url.pathname.slice(GAME.length)) || 'splash.html';
     if (rel.endsWith('/')) rel += 'index.html';
+    const ext = (rel.split('.').pop() || '').toLowerCase();
+    const hdr = { 'content-type': TYPES[ext] || 'application/octet-stream', 'cache-control': 'no-store' };
+    if (PLAIN.has(rel)) return new Response(PLAIN.get(rel), { status: 200, headers: hdr });
     const r = await fetch(new URL('c/' + (await nameOf(rel)) + '.bin', SCOPE));
     if (!r.ok) return new Response('not found', { status: 404 });
     const buf = new Uint8Array(await r.arrayBuffer());
     let plain;
     try { plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: buf.slice(0, 12) }, k, buf.slice(12)); }
     catch { return new Response('locked', { status: 403 }); }
-    const ext = (rel.split('.').pop() || '').toLowerCase();
-    return new Response(plain, { status: 200, headers: { 'content-type': TYPES[ext] || 'application/octet-stream', 'cache-control': 'no-store' } });
+    PLAIN.set(rel, plain);
+    return new Response(plain, { status: 200, headers: hdr });
   })());
 });
