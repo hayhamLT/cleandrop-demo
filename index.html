@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Clean Drop — demo</title>
+<style>
+  :root{ --bg:#040e24; --panel:#07183a; --line:#0B2D71; --ink:#ffffff; --dim:#AEC8E8; --accent:#009DD9; --teal:#00B2BD; --warn:#AEC8E8 }
+  *{box-sizing:border-box}
+  body{margin:0;min-height:100vh;display:grid;place-items:center;background:radial-gradient(120% 90% at 50% 0%,#0B2D71 0%,var(--bg) 60%);
+       color:var(--ink);font:500 16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;padding:16px}
+  .card{width:min(420px,100%);background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:32px 28px;box-shadow:0 20px 60px rgba(0,0,0,.45)}
+  h1{margin:0 0 4px;font-size:26px;letter-spacing:.02em;font-weight:900;font-style:italic}
+  h1 em{color:var(--accent);font-style:italic}
+  p{margin:0 0 22px;color:var(--dim);font-size:14px}
+  label{display:block;font-size:12px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);margin-bottom:8px}
+  input{width:100%;padding:13px 14px;border-radius:10px;border:1px solid var(--line);background:#040e24;color:var(--ink);font:inherit;font-size:16px}
+  input:focus{outline:2px solid var(--accent);outline-offset:1px}
+  button{margin-top:16px;width:100%;padding:13px;border:0;border-radius:10px;background:linear-gradient(180deg,var(--accent),#0066B2);color:#fff;
+         font:inherit;font-weight:800;letter-spacing:.06em;cursor:pointer}
+  button:disabled{opacity:.6;cursor:default}
+  .msg{min-height:22px;margin-top:12px;font-size:14px;color:var(--warn)}
+  .out{margin-top:18px;font-size:13px;color:var(--dim)}
+  .out a{color:var(--teal)}
+</style>
+</head>
+<body>
+<main class="card">
+  <h1>CLEAN <em>DROP</em> CHALLENGE</h1>
+  <p>Private demo. Enter the password you were given.</p>
+  <form id="f" autocomplete="off">
+    <label for="pw">Password</label>
+    <input id="pw" type="password" autocomplete="current-password" required autofocus>
+    <button id="go" type="submit">Open the demo</button>
+    <div class="msg" id="msg" role="status"></div>
+  </form>
+  <div class="out" id="out" hidden>Signed in on this browser. <a href="game/index.html?present">Open the demo</a> · <a href="#" id="lock">Sign out</a></div>
+</main>
+<script>
+const $ = id => document.getElementById(id), msg = t => $('msg').textContent = t;
+const b64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+if (!('serviceWorker' in navigator) || !window.isSecureContext) { msg('This browser cannot open the demo here - it needs a current browser and an https link.'); $('go').disabled = true; }
+const reg = navigator.serviceWorker?.register('sw.js', { scope: './' });
+async function worker(){ await reg; const r = await navigator.serviceWorker.ready; return r.active; }
+const ask = (w, m, want) => new Promise((res, rej) => { const h = e => { if (e.data?.type === want || e.data?.type === 'error'){
+    navigator.serviceWorker.removeEventListener('message', h); e.data.type === 'error' ? rej(new Error(e.data.message)) : res(); } };
+  navigator.serviceWorker.addEventListener('message', h); w.postMessage(m, m.raw ? [m.raw] : []); });
+// already signed in on this browser?
+// (opening the store creates it the same way the worker does - opening it bare
+// used to make an empty database the worker then could not save the key into)
+const openDb = indexedDB.open('cleandrop-demo', 1);
+openDb.onupgradeneeded = () => openDb.result.createObjectStore('k');
+openDb.onsuccess = e => { const d = e.target.result;
+  if (!d.objectStoreNames.contains('k')) return;
+  d.transaction('k').objectStore('k').get('key').onsuccess = ev => { if (ev.target.result) $('out').hidden = false; }; };
+$('lock').onclick = async e => { e.preventDefault(); await ask(await worker(), { type: 'lock' }, 'locked'); $('out').hidden = true; msg('Signed out.'); };
+$('f').onsubmit = async e => {
+  e.preventDefault(); $('go').disabled = true; msg('Checking…');
+  try {
+    const meta = await (await fetch('meta.json', { cache: 'no-cache' })).json();
+    const base = await crypto.subtle.importKey('raw', new TextEncoder().encode($('pw').value), 'PBKDF2', false, ['deriveBits']);
+    const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt: b64(meta.salt), iterations: meta.iterations }, base, 256);
+    const k = await crypto.subtle.importKey('raw', bits, 'AES-GCM', false, ['decrypt']);
+    const c = new Uint8Array(await (await fetch('check.bin', { cache: 'no-cache' })).arrayBuffer());
+    try { await crypto.subtle.decrypt({ name: 'AES-GCM', iv: c.slice(0, 12) }, k, c.slice(12)); }
+    catch { msg('That password is not right.'); $('go').disabled = false; $('pw').select(); return; }
+    msg('Opening…');
+    await ask(await worker(), { type: 'key', raw: bits }, 'key-ok');
+    location.href = 'game/index.html?present';
+  } catch (err) { msg('Could not open the demo: ' + err.message); $('go').disabled = false; }
+};
+</script>
+</body>
+</html>
