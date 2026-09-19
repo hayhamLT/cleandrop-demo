@@ -9,8 +9,25 @@ const TYPES = { html: 'text/html; charset=utf-8', js: 'text/javascript', mjs: 't
 const SCOPE = new URL(self.registration.scope);
 const GAME = new URL('game/', SCOPE).pathname;
 let KEY = null, META = null;
-// what has been decrypted this visit, so the splash's pre-load makes the game open at once
+// what has been decrypted this visit (as promises, so a file asked for twice
+// at once - the splash's pre-load, the background warm-up, the game - is
+// fetched and decrypted once), so the game opens at once
 const PLAIN = new Map();
+function plainOf(rel, k){
+  let p = PLAIN.get(rel);
+  if (!p) {
+    p = (async () => {
+      const r = await fetch(new URL('c/' + (await nameOf(rel)) + '.bin', SCOPE));
+      if (!r.ok) return 404;
+      const buf = new Uint8Array(await r.arrayBuffer());
+      try { return await crypto.subtle.decrypt({ name: 'AES-GCM', iv: buf.slice(0, 12) }, k, buf.slice(12)); }
+      catch { return 403; }
+    })();
+    PLAIN.set(rel, p);
+    p.then(v => { if (typeof v === 'number') PLAIN.delete(rel); }, () => PLAIN.delete(rel));
+  }
+  return p;
+}
 
 const db = () => new Promise((res, rej) => { const r = indexedDB.open('cleandrop-demo', 1);
   r.onupgradeneeded = () => { if (!r.result.objectStoreNames.contains('k')) r.result.createObjectStore('k'); }; r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
@@ -36,6 +53,11 @@ self.addEventListener('message', e => {
     await idb('readwrite', s => s.put(KEY, 'key'));
     e.source?.postMessage({ type: 'key-ok' });
   })().catch(err => e.source?.postMessage({ type: 'error', message: String(err && err.message || err) })));
+  /* the splash leaves the music out of its pre-load (it is streamed, and 7 MB
+     of it held the game back on a phone) and hands the list here to fetch
+     behind the game once it is running */
+  if (m.type === 'warm') e.waitUntil((async () => { const k = await key(); if (!k) return;
+    for (const rel of m.paths || []) await plainOf(rel, k).catch(() => {}); })());
   if (m.type === 'lock') e.waitUntil((async () => { KEY = null; PLAIN.clear(); await idb('readwrite', s => s.delete('key')); e.source?.postMessage({ type: 'locked' }); })());
 });
 
@@ -61,14 +83,9 @@ self.addEventListener('fetch', e => {
       if (a >= n || a > b) return new Response(null, { status: 416, headers: { 'content-range': `bytes */${n}` } });
       return new Response(plain.slice(a, b + 1), { status: 206, headers: { ...hdr, 'content-range': `bytes ${a}-${b}/${n}`, 'content-length': String(b - a + 1) } });
     };
-    if (PLAIN.has(rel)) return reply(PLAIN.get(rel));
-    const r = await fetch(new URL('c/' + (await nameOf(rel)) + '.bin', SCOPE));
-    if (!r.ok) return new Response('not found', { status: 404 });
-    const buf = new Uint8Array(await r.arrayBuffer());
-    let plain;
-    try { plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: buf.slice(0, 12) }, k, buf.slice(12)); }
-    catch { return new Response('locked', { status: 403 }); }
-    PLAIN.set(rel, plain);
+    const plain = await plainOf(rel, k);
+    if (plain === 404) return new Response('not found', { status: 404 });
+    if (plain === 403) return new Response('locked', { status: 403 });
     return reply(plain);
   })());
 });
