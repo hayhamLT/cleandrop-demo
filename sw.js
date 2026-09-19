@@ -5,7 +5,7 @@
  * same browser is not asked again; "Sign out" on the gate page forgets it. */
 const TYPES = { html: 'text/html; charset=utf-8', js: 'text/javascript', mjs: 'text/javascript', json: 'application/json',
   css: 'text/css', svg: 'image/svg+xml', png: 'image/png', jpg: 'image/jpeg', webp: 'image/webp', ttf: 'font/ttf',
-  woff2: 'font/woff2', mp3: 'audio/mpeg', webm: 'video/webm', mp4: 'video/mp4', md: 'text/markdown' };
+  woff2: 'font/woff2', mp3: 'audio/mpeg', webm: 'video/webm', mp4: 'video/mp4', mov: 'video/quicktime', md: 'text/markdown' };
 const SCOPE = new URL(self.registration.scope);
 const GAME = new URL('game/', SCOPE).pathname;
 let KEY = null, META = null;
@@ -48,8 +48,20 @@ self.addEventListener('fetch', e => {
     let rel = decodeURIComponent(url.pathname.slice(GAME.length)) || 'splash.html';
     if (rel.endsWith('/')) rel += 'index.html';
     const ext = (rel.split('.').pop() || '').toLowerCase();
-    const hdr = { 'content-type': TYPES[ext] || 'application/octet-stream', 'cache-control': 'no-store' };
-    if (PLAIN.has(rel)) return new Response(PLAIN.get(rel), { status: 200, headers: hdr });
+    const hdr = { 'content-type': TYPES[ext] || 'application/octet-stream', 'cache-control': 'no-store', 'accept-ranges': 'bytes' };
+    /* Safari only plays audio and video it can fetch in byte ranges (206);
+       handed the whole file it plays nothing - no music, no engine (18 Sept).
+       So a Range request gets the slice it asked for. */
+    const reply = plain => {
+      const range = /^bytes=(\d*)-(\d*)$/.exec(e.request.headers.get('range') || '');
+      const n = plain.byteLength;
+      if (!range) return new Response(plain, { status: 200, headers: { ...hdr, 'content-length': String(n) } });
+      let a = range[1] === '' ? Math.max(0, n - +range[2]) : +range[1];
+      let b = range[1] === '' ? n - 1 : (range[2] === '' ? n - 1 : Math.min(+range[2], n - 1));
+      if (a >= n || a > b) return new Response(null, { status: 416, headers: { 'content-range': `bytes */${n}` } });
+      return new Response(plain.slice(a, b + 1), { status: 206, headers: { ...hdr, 'content-range': `bytes ${a}-${b}/${n}`, 'content-length': String(b - a + 1) } });
+    };
+    if (PLAIN.has(rel)) return reply(PLAIN.get(rel));
     const r = await fetch(new URL('c/' + (await nameOf(rel)) + '.bin', SCOPE));
     if (!r.ok) return new Response('not found', { status: 404 });
     const buf = new Uint8Array(await r.arrayBuffer());
@@ -57,6 +69,6 @@ self.addEventListener('fetch', e => {
     try { plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: buf.slice(0, 12) }, k, buf.slice(12)); }
     catch { return new Response('locked', { status: 403 }); }
     PLAIN.set(rel, plain);
-    return new Response(plain, { status: 200, headers: hdr });
+    return reply(plain);
   })());
 });
