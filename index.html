@@ -53,7 +53,19 @@ const openDb = indexedDB.open('cleandrop-demo', 1);
 openDb.onupgradeneeded = () => openDb.result.createObjectStore('k');
 openDb.onsuccess = e => { const d = e.target.result;
   if (!d.objectStoreNames.contains('k')) return;
-  d.transaction('k').objectStore('k').get('key').onsuccess = ev => { if (ev.target.result) $('out').hidden = false; }; };
+  d.transaction('k').objectStore('k').get('key').onsuccess = async ev => {
+    const k = ev.target.result; if (!k) return;
+    /* A stored key opens only the build it was made for: every build draws a new
+       salt, so after a rebuild a returning visitor's key is stale - and "Open the
+       demo" led to a page reading "locked" (23 Sept). Test it on this build's
+       marker first; a stale one is forgotten, here and in the worker's memory,
+       and the password is simply asked for again. */
+    try {
+      const c = new Uint8Array(await (await fetch('check.bin', { cache: 'no-cache' })).arrayBuffer());
+      await crypto.subtle.decrypt({ name: 'AES-GCM', iv: c.slice(0, 12) }, k, c.slice(12));
+      $('out').hidden = false;
+    } catch { try { await ask(await worker(), { type: 'lock' }, 'locked'); } catch {} }
+  }; };
 $('lock').onclick = async e => { e.preventDefault(); await ask(await worker(), { type: 'lock' }, 'locked'); $('out').hidden = true; msg('Signed out.'); };
 $('f').onsubmit = async e => {
   e.preventDefault(); $('go').disabled = true; msg('Checking…');
