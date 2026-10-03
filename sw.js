@@ -29,7 +29,9 @@ function plainOf(rel, k){
   return p;
 }
 
-const db = () => new Promise((res, rej) => { const r = indexedDB.open('cleandrop-demo', 1);
+// one key store per site (the gate uses the same name): the game and the dashboard share an origin
+const DBNAME = 'cleandrop-demo:' + SCOPE.pathname;
+const db = () => new Promise((res, rej) => { const r = indexedDB.open(DBNAME, 1);
   r.onupgradeneeded = () => { if (!r.result.objectStoreNames.contains('k')) r.result.createObjectStore('k'); }; r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
 const idb = async (mode, fn) => { const d = await db(); return new Promise((res, rej) => {
   const t = d.transaction('k', mode), q = fn(t.objectStore('k')); t.oncomplete = () => res(q && q.result); t.onerror = () => rej(t.error); }); };

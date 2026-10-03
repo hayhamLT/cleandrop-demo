@@ -39,6 +39,15 @@
 </main>
 <script>
 const $ = id => document.getElementById(id), msg = t => $('msg').textContent = t;
+/* Where the password leads is the build's (meta.json `entry`): the game's splash,
+   or the dashboard's review copy on the dashboard site. */
+let NEXT = 'game/splash.html';
+fetch('meta.json', { cache: 'no-cache' }).then(r => r.json()).then(m => { if (!m.entry) return;
+  NEXT = 'game/' + m.entry; $('go').textContent = m.button || 'Open';
+  const a = $('out').querySelector('a'); a.href = NEXT; a.textContent = m.button || 'Open'; }).catch(() => {});
+/* One key store per site: the game and the dashboard share an origin, and a
+   single store let signing in to one sign the other out. */
+const DBNAME = 'cleandrop-demo:' + new URL('./', location.href).pathname;
 const b64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
 if (!('serviceWorker' in navigator) || !window.isSecureContext) { msg('This browser cannot open the demo here - it needs a current browser and an https link.'); $('go').disabled = true; }
 const reg = navigator.serviceWorker?.register('sw.js', { scope: './' });
@@ -49,7 +58,7 @@ const ask = (w, m, want) => new Promise((res, rej) => { const h = e => { if (e.d
 // already signed in on this browser?
 // (opening the store creates it the same way the worker does - opening it bare
 // used to make an empty database the worker then could not save the key into)
-const openDb = indexedDB.open('cleandrop-demo', 1);
+const openDb = indexedDB.open(DBNAME, 1);
 openDb.onupgradeneeded = () => openDb.result.createObjectStore('k');
 openDb.onsuccess = e => { const d = e.target.result;
   if (!d.objectStoreNames.contains('k')) return;
@@ -71,6 +80,7 @@ $('f').onsubmit = async e => {
   e.preventDefault(); $('go').disabled = true; msg('Checking…');
   try {
     const meta = await (await fetch('meta.json', { cache: 'no-cache' })).json();
+    if (meta.entry) NEXT = 'game/' + meta.entry;
     const base = await crypto.subtle.importKey('raw', new TextEncoder().encode($('pw').value), 'PBKDF2', false, ['deriveBits']);
     const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt: b64(meta.salt), iterations: meta.iterations }, base, 256);
     const k = await crypto.subtle.importKey('raw', bits, 'AES-GCM', false, ['decrypt']);
@@ -79,7 +89,7 @@ $('f').onsubmit = async e => {
     catch { msg('That password is not right.'); $('go').disabled = false; $('pw').select(); return; }
     msg('Opening…');
     await ask(await worker(), { type: 'key', raw: bits }, 'key-ok');
-    location.href = 'game/splash.html';
+    location.href = NEXT;
   } catch (err) { msg('Could not open the demo: ' + err.message); $('go').disabled = false; }
 };
 </script>
