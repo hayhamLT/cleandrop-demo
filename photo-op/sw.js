@@ -19,7 +19,7 @@ function plainOf(rel, k){
     p = (async () => {
       const r = await fetch(new URL('c/' + (await nameOf(rel)) + '.bin', SCOPE));
       if (!r.ok) return 404;
-      const buf = new Uint8Array(await r.arrayBuffer());
+      const buf = await readCounting(r, rel);
       try { return await crypto.subtle.decrypt({ name: 'AES-GCM', iv: buf.slice(0, 12) }, k, buf.slice(12)); }
       catch { return 403; }
     })();
@@ -27,6 +27,23 @@ function plainOf(rel, k){
     p.then(v => { if (typeof v === 'number') PLAIN.delete(rel); }, () => PLAIN.delete(rel));
   }
   return p;
+}
+
+/* Progress (12 Nov, the photo op bench's loader): a file is only usable once it has all arrived and been decrypted,
+   so a page cannot watch its own downloads. The bytes are counted here as they stream in and reported to every open
+   page (at most ~10 times a second), and a page that opens late asks for the tally so far ('progress?'). The counts are
+   bytes as they arrive after GitHub's transfer compression, which is the file's own size - so a page can add them up
+   against the sizes in manifest.json. */
+const GOT = new Map();
+let lastPost = 0;
+async function post(force){ const now = Date.now(); if (!force && now - lastPost < 100) return; lastPost = now;
+  const got = Object.fromEntries(GOT); for (const c of await self.clients.matchAll()) c.postMessage({ type: 'progress', got }); }
+async function readCounting(r, rel){
+  if (!r.body || !r.body.getReader) { const b = new Uint8Array(await r.arrayBuffer()); GOT.set(rel, b.length); post(true); return b; }
+  const rd = r.body.getReader(), parts = []; let n = 0;
+  for (;;) { const { done, value } = await rd.read(); if (done) break; parts.push(value); n += value.length; GOT.set(rel, n); post(false); }
+  const buf = new Uint8Array(n); let o = 0; for (const p of parts) { buf.set(p, o); o += p.length; }
+  post(true); return buf;
 }
 
 // one key store per site (the gate uses the same name): the game and the dashboard share an origin
@@ -60,6 +77,7 @@ self.addEventListener('message', e => {
      behind the game once it is running */
   if (m.type === 'warm') e.waitUntil((async () => { const k = await key(); if (!k) return;
     for (const rel of m.paths || []) await plainOf(rel, k).catch(() => {}); })());
+  if (m.type === 'progress?') e.source?.postMessage({ type: 'progress', got: Object.fromEntries(GOT) });
   if (m.type === 'lock') e.waitUntil((async () => { KEY = null; PLAIN.clear(); await idb('readwrite', s => s.delete('key')); e.source?.postMessage({ type: 'locked' }); })());
 });
 
